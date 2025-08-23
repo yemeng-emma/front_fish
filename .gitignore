@@ -1,3 +1,11 @@
+# Data stuff
+data/*
+# data/raw_data/
+# data/manual_data/*
+
+# Output
+output/*
+
 # History files
 .Rhistory
 .Rapp.history
