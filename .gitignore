@@ -6,6 +6,9 @@ data/*
 # Output
 output/*
 
+# Sandbox folder
+sandbox/*
+
 # History files
 .Rhistory
 .Rapp.history
