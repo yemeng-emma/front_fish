@@ -1,0 +1,826 @@
+---
+title: "Exploring data in progress"
+author: "Meng Ye"
+date: "2025-08-28"
+output: html_document
+---
+
+## Set up and import data 
+
+```{r setup, include=FALSE}
+# Set global random seed for reproducibility
+set.seed(1873) #generated at random.org
+```
+
+
+```{r packages message=FALSE, warning=FALSE}
+#load packages
+library(tidyverse)        # ggplot, dplyr, and friends
+library(broom)            # Convert model objects to tidy data frames
+library(broom.mixed)      # Convert mixed model objects to tidy data frames
+library(parameters)       # Show model results as nice tables
+library(scales)           # Nicer labeling functions
+library(marginaleffects)  # Calculate marginal effects
+library(ggforce)          # For facet_col()
+library(brms)             # The best formula-based interface to Stan
+library(tidybayes)        # Manipulate Stan results in tidy ways
+library(ggdist)           # Fancy distribution plots
+library(patchwork)        # Combine ggplot plots
+library(ggtext)           # For plot formatting
+library(rcartocolor)      # Color palettes from CARTOColors (https://carto.com/carto-colors/)
+library(here)             # managing directory
+library(readxl)           # read excel files
+library(janitor)          # clean column names 
+
+```
+
+```{r plot setting message=FALSE, warning=FALSE}
+#load packages
+# Custom ggplot theme to make pretty plots
+# Get the font at https://github.com/intel/clear-sans
+theme_nice <- function() {
+  theme_minimal() +
+    theme(panel.grid.minor = element_blank(),
+          plot.title = element_text(face = "bold"),
+          axis.title.x = element_text(hjust = 0),
+          axis.title.y = element_text(hjust = 1),
+          strip.text = element_text(face = "bold",
+                                    size = rel(0.75), hjust = 0),
+          strip.background = element_rect(fill = "grey90", color = NA))
+}
+
+theme_set(theme_nice())
+
+clrs <- carto_pal(name = "Prism")
+
+# Functions for formatting things as percentage points
+label_pp <- label_number(accuracy = 1, scale = 100, 
+                         suffix = " pp.", style_negative = "minus")
+```
+
+
+```{r data, message=FALSE, warning=FALSE}
+# survey data
+survey <- read_excel(here("data", "raw_data", "data_survey5.xlsx")) |>
+          clean_names() |>
+          rename_with(~ gsub("^x[0-9_]+", "", .x))
+
+# conjoint specific levels and choices 
+choices <- read_excel(here("data", "raw_data", "data_choice5.xlsx")) |>
+           clean_names() |>
+           filter(concept != 4) # filter out none option as seperate lines (information redundant) 
+# Prolific demographic 
+
+demogr <- read_csv(here("data", "raw_data", "data_demogr5.csv")) |>
+          clean_names()
+```
+
+
+## Data Cleaning 
+
+
+```{r message=FALSE, warning=FALSE}
+# merge the survey, conjoint choices log and the demographic data set
+conjoint <- survey |>
+  left_join(choices, by = join_by(record_id)) |>
+  left_join(demogr, by = join_by(prolific == participant_id)) |>
+  mutate(age = as.numeric(age)) |>
+  mutate(
+    # Convert nonprofit_type
+    nonprofit_type = case_when(
+      nonprofit_type == 1 ~ "Community arts center",
+      nonprofit_type == 2 ~ "Student tutoring center",
+      nonprofit_type == 3 ~ "Urban forestry center",
+      nonprofit_type == 4 ~ "Mental health center",
+      TRUE ~ as.character(nonprofit_type) 
+    ) |> factor(levels = c("Community arts center", "Student tutoring center",
+                           "Urban forestry center", "Mental health center")),
+    
+    # Create rbi from core_service_price
+    rbi = case_when(
+      core_service_price == 1 ~ "Free",
+      core_service_price == 2 ~ "Reduced price",
+      core_service_price == 3 ~ "Full price",
+      TRUE ~ as.character(core_service_price)
+    ) |> factor(levels = c("Free", "Reduced price", "Full price")),
+    
+    # Convert use_of_donations
+    use_of_donations = case_when(
+      use_of_donations == 1 ~ "Paying program staff",
+      use_of_donations == 2 ~ "Capacity building",
+      use_of_donations == 3 ~ "Rainy day funds",
+      use_of_donations == 4 ~ "Unrestricted use",
+      TRUE ~ as.character(use_of_donations)
+    ) |> factor(levels = c("Paying program staff", "Capacity building",
+                           "Rainy day funds", "Unrestricted use")),
+    
+    # Create ubi from side_business
+    ubi = case_when(
+      side_business == 1 ~ "None",
+      side_business == 2 ~ "Event space rental",
+      side_business == 3 ~ "Running a pizza shop",
+      TRUE ~ as.character(side_business)
+    ) |> factor(levels = c("None", "Event space rental", "Running a pizza shop")),
+    
+    # Create financial_situation from nonprofit_financial_situation
+    financial_situation = case_when(
+      nonprofit_financial_situation == 1 ~ "In good condition",
+      nonprofit_financial_situation == 2 ~ "Under financial stress",
+      TRUE ~ as.character(nonprofit_financial_situation)
+    ) |> factor(levels = c("In good condition", "Under financial stress"))
+  )
+
+```
+
+
+```{r}
+# checking how much of the conjoint survey has demographic data available
+summary(conjoint$age)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+#  19.00   33.00   46.00   45.77   59.00   89.00     990 
+
+990 / nrow(conjoint) # 2.8% of the data missing age value
+```
+
+```{r}
+# covert choice levels for multinomial regression
+conjoint_choice_alt <- conjoint |>
+  mutate(choice_alt = factor(concept * response)) 
+```
+
+
+
+```{r}
+# run the Bayesian model with brm
+model_conjoint <- brm(
+  bf(choice_alt ~ 0 + rbi + ubi + nonprofit_type + use_of_donations + financial_situation + (1 | prolific)),
+  data = conjoint_choice_alt,
+  family = categorical(refcat = "0"),
+  prior = c(
+    prior(normal(0, 3), class = b, dpar = mu1),
+    prior(normal(0, 3), class = b, dpar = mu2),
+    prior(normal(0, 3), class = b, dpar = mu3),
+    prior(exponential(1), class = sd, dpar = mu1),
+    prior(exponential(1), class = sd, dpar = mu2),
+    prior(exponential(1), class = sd, dpar = mu3)
+  ),
+  chains = 4, cores = 16, iter = 4000, warmup = 1000, seed = 1873,
+  backend = "cmdstanr", threads = threading(4), refresh = 100,
+  file = here("output", "model_conjoint_brms5")
+)
+
+```
+
+
+
+
+## Extract model restuls - collapse the three choices options 
+
+```{r message=FALSE, warning=FALSE}
+conjoint_cat_marginalized <- model_conjoint |> 
+  gather_draws(`^b_.*$`, regex = TRUE) |> 
+  # splits the .variable column into two parts
+  separate_wider_regex(
+    .variable,
+    patterns = c(mu = "b_mu\\d_", .variable = ".*")
+  ) |> 
+  # Find the average of the three mu estimates for each variable within each
+  # draw, or marginalize across the three options, since they're randomized
+  group_by(.variable, .draw) %>% 
+  summarize(.value = mean(.value))
+```
+
+
+
+```{r}
+# list of coefficients
+conjoint_cat_marginalized %>% 
+  group_by(.variable) %>% 
+  median_qi()
+```
+
+
+
+## Predictions for specified categories
+
+```{r}
+# avg_predictions(model_conjoint)
+# Group   Estimate    2.5 %    97.5 %
+# <chr>   <chr>       <chr>    <chr>
+# 0	      0.6980	    0.6935	 0.7026	
+# 1	      0.1046	    0.1015	 0.1078	
+# 2	      0.1007	    0.0976	 0.1038	
+# 3	      0.0967	    0.0937	 0.0997
+
+```
+
+
+
+
+
+## Predictions data grid 
+
+
+```{r}
+# pull a random prolific number
+prolific_id1 <- sample(conjoint$prolific, 1)
+# derive all possible combinations of feature levels
+newdata_all_combos <- conjoint |> 
+  tidyr::expand(rbi, ubi, nonprofit_type, use_of_donations, financial_situation) |>
+  mutate(prolific = prolific_id1) 
+newdata_all_combos
+```
+
+Derive the whole posterior prediction data 
+
+```{r}
+# predicted data
+all_preds_brms <- model_conjoint |> 
+  epred_draws(newdata = newdata_all_combos) |>
+  filter(.category == 0) |> 
+  mutate(.epred = 1 - .epred)
+```
+
+
+
+## AMECS all in one
+
+```{r message=FALSE, warning=FALSE}
+# build amces data frame
+amces_conjoint <- bind_rows(
+  rbi = all_preds_brms |>
+    group_by(rbi, .draw) |>
+    summarize(avg = mean(.epred)) |> 
+    compare_levels(variable = avg, by = rbi, comparison = "control") |>  
+    rename(contrast = rbi),
+  ubi = all_preds_brms |> 
+    group_by(ubi, .draw) |> 
+    summarize(avg = mean(.epred)) |>  
+    compare_levels(variable = avg, by = ubi, comparison = "control") |>  
+    rename(contrast = ubi),
+  nonprofit_type = all_preds_brms |>  
+    group_by(nonprofit_type, .draw) |> 
+    summarize(avg = mean(.epred)) |> 
+    compare_levels(variable = avg, by = nonprofit_type, comparison = "control") |>  
+    rename(contrast = nonprofit_type),
+  use_of_donations = all_preds_brms |> 
+    group_by(use_of_donations, .draw) |> 
+    summarize(avg = mean(.epred)) |> 
+    compare_levels(variable = avg, by = use_of_donations, comparison = "control") |>  
+    rename(contrast = use_of_donations),
+  
+  financial_situation = all_preds_brms |>  
+    group_by(financial_situation, .draw) |> 
+    summarize(avg = mean(.epred)) |>  
+    compare_levels(variable = avg, by = financial_situation, comparison = "control") |> 
+    rename(contrast = financial_situation),
+  .id = "term"
+) |> 
+  mutate(term = factor(term, 
+                       levels = c("rbi", "ubi", "nonprofit_type", 
+                                  "use_of_donations", "financial_situation")))
+  
+
+amces_conjoint |> 
+  group_by(term, contrast) |>
+  median_qi(avg)
+
+```
+
+
+```{r}
+# prepare plotting data 
+direct_var_levels <- tibble(
+  variable = c("rbi", "ubi", "nonprofit_type", "use_of_donations", "financial_situation")
+) |> 
+  mutate(levels = map(variable, ~{
+    x <- conjoint_choice_alt[[.x]]
+    if (is.numeric(x)) {
+      ""
+    } else if (is.factor(x)) {
+      levels(x)
+    } else {
+      sort(unique(x))
+    }
+  })) %>% 
+  unnest(levels) %>% 
+  mutate(term = paste0(variable, levels))
+
+# Make a little lookup table for nicer feature labels
+direct_var_lookup <- tribble(
+  ~variable, ~variable_nice,
+  "rbi",                    "RBI",
+  "ubi",                    "UBI",
+  "nonprofit_type",         "Nonprofit Types",
+  "use_of_donations",       "Use of Donations",
+  "financial_situation",    "Financial Situation"
+) |> 
+  mutate(variable_nice = fct_inorder(variable_nice))
+```
+
+
+```{r fig.height=8, fig.width=9}
+# Direct AMCEs All in one
+posterior_amces_nested <- amces_conjoint |> 
+  separate_wider_delim(
+    contrast,
+    delim = " - ", 
+    names = c("variable_level", "reference_level")
+  ) |> 
+  group_by(term, variable_level) |> 
+  nest()
+
+plot_data_amce <- direct_var_levels |>
+  left_join(
+    posterior_amces_nested,
+    by = join_by(variable == term, levels == variable_level)
+  ) %>%
+  mutate(data = map_if(data, is.null, ~ tibble(avg = 0))) |> 
+  unnest(data) |>
+  left_join(direct_var_lookup, by = join_by(variable)) |> 
+  mutate(across(c(levels, variable_nice), ~fct_inorder(.))) 
+
+p1 <- plot_data_amce |>
+  ggplot(aes(x = avg, y = fct_rev(levels), fill = variable_nice)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_halfeye() + 
+  facet_col(facets = "variable_nice", scales = "free_y", space = "free") +
+  scale_x_continuous(labels = label_pp) +
+
+  scale_fill_manual(values = clrs[c(3, 7, 8, 9, 11)], guide = "none") +
+  labs(
+    x = "Percentage point change in probability of donations",
+    y = NULL,
+    title = "Posterior AMCEs",
+    slab_alpha = NULL
+  ) +
+  theme(
+    legend.position = "top",
+    legend.justification = "left",
+    legend.margin = margin(l = -7, t = 0)
+  )
+p1
+```
+
+
+
+## MMs All in one 
+
+```{r message=FALSE, warning=FALSE}
+## build marginal means data 
+mms_conjoint <- bind_rows(
+  rbi = all_preds_brms |>
+    group_by(variable_level = rbi, .draw) |>
+    summarize(avg = mean(.epred)),
+  
+  ubi = all_preds_brms |> 
+    group_by(variable_level = ubi, .draw) |> 
+    summarize(avg = mean(.epred)),
+  
+  nonprofit_type = all_preds_brms |>  
+    group_by(variable_level = nonprofit_type, .draw) |> 
+    summarize(avg = mean(.epred)),
+  
+  use_of_donations = all_preds_brms |> 
+    group_by(variable_level = use_of_donations, .draw) |> 
+    summarize(avg = mean(.epred)),
+  
+  financial_situation = all_preds_brms |>  
+    group_by(variable_level = financial_situation, .draw) |> 
+    summarize(avg = mean(.epred)),
+  .id = "term"
+) |> 
+  mutate(term = factor(term, 
+                       levels = c("rbi", "ubi", "nonprofit_type", 
+                                  "use_of_donations", "financial_situation")))
+  
+
+mms_conjoint |> 
+  group_by(term, variable_level) |>
+  median_qi(avg)
+```
+
+
+```{r fig.height=8, fig.width=9}
+# Direct AMCEs All in one
+posterior_mms_nested <- mms_conjoint |> 
+  group_by(term, variable_level) |> 
+  nest()
+
+plot_data_mm <- direct_var_levels |>
+  left_join(
+    posterior_mms_nested,
+    by = join_by(variable == term, levels == variable_level)
+  ) |>
+  unnest(data) |>
+  left_join(direct_var_lookup, by = join_by(variable)) |> 
+  mutate(across(c(levels, variable_nice), ~fct_inorder(.))) 
+
+p2 <- plot_data_mm |>
+  ggplot(aes(x = avg, y = fct_rev(levels), fill = variable_nice)) +
+  geom_vline(xintercept = 0.25, linetype = "dashed") +
+  stat_halfeye() + 
+  facet_col(facets = "variable_nice", scales = "free_y", space = "free") +
+  scale_x_continuous(labels = label_percent(accuracy = 1)) +
+
+  scale_fill_manual(values = clrs[c(3, 7, 8, 9, 11)], guide = "none") +
+  labs(
+    x = "Marginal means of probabilities",
+    y = NULL,
+    title = "Posterior marginal means ",
+    slab_alpha = NULL
+  ) +
+  theme(
+    legend.position = "top",
+    legend.justification = "left",
+    legend.margin = margin(l = -7, t = 0)
+  )
+p2
+```
+
+```{r fig.height=8, fig.width=12}
+p2 | p1
+```
+
+## Interactions 
+
+
+
+### 1.rbi
+
+```{r message=FALSE, warning=FALSE}
+preds_rbi_marginalized <- all_preds_brms |>
+  group_by(rbi, .draw) |>
+  summarize(avg = mean(.epred))
+
+# mm median 
+mm_rbi <- preds_rbi_marginalized |>
+  group_by(rbi) |>
+  median_qi()
+```
+
+
+
+**Marginal means**
+
+```{r plot rbi mm}
+# pull vline value
+rbi_benchmarks <- mm_rbi %>%
+  select(rbi, avg) %>%
+  filter(rbi %in% c("Free", "Reduced price", "Full price"))
+
+
+p_rbi <- preds_rbi_marginalized %>% 
+  ggplot(aes(x = avg, y = fct_rev(rbi), fill = rbi)) +
+  stat_halfeye() +
+  geom_vline(data = rbi_benchmarks, 
+             aes(xintercept = avg, color = rbi), 
+             linetype = "dashed",
+             linewidth = 0.75) +
+  geom_vline(xintercept = 0.25, 
+             color = "black", 
+             linetype = "solid",
+             linewidth = 0.7) +
+  scale_x_continuous(labels = label_percent(), limits = c(0.1, 0.55) ) +
+  scale_color_manual(values = colorspace::darken(clrs[c(11, 7, 3)], 0.3), guide = "none") +
+  scale_fill_manual(values = colorspace::darken(clrs[c(11, 7, 3)], 0.3), guide = "none") +
+  labs(x = NULL, y = NULL, 
+       title = "Overall RBI Marginal Means") +
+  theme_bw() +
+  theme(
+    plot.title = element_textbox_simple(
+      face = "bold",
+      fill = "grey75",
+      size = rel(0.85),
+      halign = 0,
+      linetype = 1,
+      linewidth = 0.2,
+      padding = margin(5, 5, 5, 5)
+    ),
+    strip.background = element_rect(fill = "grey92"),
+    strip.text = element_text(hjust = 0)
+  )
+p_rbi
+```
+
+
+#### rbi * use
+
+```{r message=FALSE, warning=FALSE}
+preds_rbi_use_marginalized <- all_preds_brms |>
+  group_by(rbi, use_of_donations, .draw) |>
+  summarize(avg = mean(.epred))
+
+preds_rbi_use_marginalized |>
+  group_by(rbi, use_of_donations) |>
+  median_qi()
+```
+
+
+
+```{r fig.height=5, fig.width=7}
+p_rbi_use <- preds_rbi_use_marginalized |>
+  ggplot(aes(x = avg, y = fct_rev(rbi), fill = rbi, slab_alpha = use_of_donations)) +
+  stat_halfeye(normalize = "groups") +
+  geom_vline(data = rbi_benchmarks, 
+             aes(xintercept = avg, color = rbi), 
+             linetype = "dashed",
+             linewidth = 0.75) +
+  geom_vline(xintercept = 0.25, 
+             color = "black", 
+             linetype = "solid",
+             linewidth = 0.7) +
+
+  scale_x_continuous(labels = label_percent(), limits = c(0.1, 0.55) ) +
+  scale_color_manual(values = colorspace::darken(clrs[c(11, 7, 3)], 0.3), guide = "none") +
+  scale_fill_manual(values = colorspace::darken(clrs[c(11, 7, 3)], 0.3), guide = "none") +
+  scale_slab_alpha_discrete(
+    range = c(0.8, 0.4),
+    guide = "none"
+  ) +
+  facet_wrap(vars(use_of_donations), ncol = 1) +
+  labs(x = "Predicted probability of donation", y = NULL,  
+       title = "RBI × Use of Donations Marginal Means") +
+  theme_bw() +
+  theme(
+    plot.title = element_textbox_simple(
+      face = "bold",
+      fill = "grey75",
+      size = rel(0.9),
+      halign = 0,
+      linetype = 1,
+      linewidth = 0.2,
+      padding = margin(5, 5, 5, 5)
+    ),
+    strip.background = element_rect(fill = "grey92"),
+    strip.text = element_text(hjust = 0)
+  )
+p_rbi_use
+```
+
+
+
+
+```{r fig.height=8, fig.width=9.5}
+p_rbi_use_merged <- p_rbi / p_rbi_use +  plot_layout(heights = c(1, 5)) 
+p_rbi_use_merged
+```
+#### rbi * finance
+
+```{r message=FALSE, warning=FALSE}
+preds_rbi_finance_marginalized <- all_preds_brms |>
+  group_by(rbi, financial_situation, .draw) |>
+  summarize(avg = mean(.epred))
+
+preds_rbi_finance_marginalized |>
+  group_by(rbi, financial_situation) |>
+  median_qi()
+```
+
+
+```{r fig.height=5, fig.width=7}
+p_rbi_finance <- preds_rbi_finance_marginalized |>
+  ggplot(aes(x = avg, y = fct_rev(rbi), fill = rbi, slab_alpha = financial_situation)) +
+  stat_halfeye(normalize = "groups") +
+  geom_vline(data = rbi_benchmarks, 
+             aes(xintercept = avg, color = rbi), 
+             linetype = "dashed",
+             linewidth = 0.75) +
+  geom_vline(xintercept = 0.25, 
+             color = "black", 
+             linetype = "solid",
+             linewidth = 0.7) +
+
+  scale_x_continuous(labels = label_percent(), limits = c(0.1, 0.55) ) +
+  scale_color_manual(values = colorspace::darken(clrs[c(11, 7, 3)], 0.3), guide = "none") +
+  scale_fill_manual(values = colorspace::darken(clrs[c(11, 7, 3)], 0.3), guide = "none") +
+  scale_slab_alpha_discrete(
+    range = c(0.8, 0.4),
+    guide = "none"
+  ) +
+  facet_wrap(vars(financial_situation), ncol = 1) +
+  labs(x = "Predicted probability of donation", y = NULL,  
+       title = "RBI × Financial Situation Marginal Means") +
+  theme_bw() +
+  theme(
+    plot.title = element_textbox_simple(
+      face = "bold",
+      fill = "grey75",
+      size = rel(0.9),
+      halign = 0,
+      linetype = 1,
+      linewidth = 0.2,
+      padding = margin(5, 5, 5, 5)
+    ),
+    strip.background = element_rect(fill = "grey92"),
+    strip.text = element_text(hjust = 0)
+  )
+p_rbi_finance
+```
+
+```{r fig.height=6, fig.width=9}
+p_rbi_finance_merged <- p_rbi / p_rbi_finance +  plot_layout(heights = c(1, 2)) 
+p_rbi_finance_merged
+```
+
+### 2.ubi
+
+
+**MMs** of ubi only
+
+```{r message=FALSE, warning=FALSE}
+preds_ubi_marginalized <- all_preds_brms |>
+  group_by(ubi, .draw) |>
+  summarize(avg = mean(.epred))
+
+# mm median 
+mm_ubi <- preds_ubi_marginalized |>
+  group_by(ubi) |>
+  median_qi()
+```
+
+
+
+```{r plot ubi mm}
+# pull vline value
+ubi_benchmarks <- c(
+  mm_ubi %>% filter(ubi == "none") %>% pull(avg),
+  mm_ubi %>% filter(ubi == "event space rental") %>% pull(avg),
+  mm_ubi %>% filter(ubi == "running a pizza shop") %>% pull(avg)
+)
+p_ubi <- preds_ubi_marginalized %>% 
+  ggplot(aes(x = avg, y = fct_rev(ubi), fill = ubi)) +
+  stat_halfeye() +
+  geom_vline(xintercept = rbi_benchmarks, 
+             color = "red", 
+             linetype = "dashed",
+             linewidth = 0.5) +
+  facet_wrap(vars("Overall UBI Marginal Means")) +
+  scale_x_continuous(labels = label_percent(), limits = c(0.2, 0.4) ) +
+  scale_fill_manual(values = clrs[c(11, 7, 3)], guide = "none") +
+  labs(x = NULL, y = "UBI") +
+  theme(
+    panel.background = element_rect(fill = "grey80", color = NA)
+  )
+
+p_ubi
+```
+
+
+ubi * use
+
+```{r message=FALSE, warning=FALSE}
+preds_ubi_use_marginalized <- all_preds_brms |>
+  group_by(ubi, use_of_donations, .draw) |>
+  summarize(avg = mean(.epred))
+
+preds_ubi_use_marginalized |>
+  group_by(ubi, use_of_donations) |>
+  median_qi()
+```
+
+
+
+```{r fig.height=7, fig.width=7}
+p_ubi_use <- preds_ubi_use_marginalized |>
+  ggplot(aes(x = avg, y = fct_rev(ubi), fill = ubi, slab_alpha = use_of_donations)) +
+  stat_halfeye(normalize = "groups") +
+  geom_vline(xintercept = ubi_benchmarks, 
+             color = "red", 
+             linetype = "dashed",
+             linewidth = 0.5) +
+  scale_x_continuous(labels = label_percent(),  limits = c(0.2, 0.4) ) +
+  scale_slab_alpha_discrete(
+    range = c(0.8, 0.2),
+    guide = "none"
+  ) +
+  facet_wrap(vars(use_of_donations), ncol = 1) +
+  scale_fill_manual(values = clrs[c(11, 7, 3)], guide = "none") +
+  labs(x = "Predicted probability of donation", y = "UBI * USE")
+p_ubi_use
+```
+
+```{r fig.height=6, fig.width=8}
+p_ubi / p_ubi_use +
+   plot_layout(heights = c(1, 4)) 
+```
+
+
+
+
+
+
+## Robustness checks
+
+1. check for duplicated records: NONE
+
+```{r}
+# Check for duplicated Prolific IDs
+duplicated_ids <- survey$prolific[duplicated(survey$prolific)]
+
+# View the duplicated IDs
+duplicated_ids
+
+# Count how many duplicates
+length(duplicated_ids)
+
+# Optional: get full rows of duplicated IDs
+survey[duplicated(survey$prolific) | duplicated(survey$prolific, fromLast = TRUE), ]
+
+#character(0)
+#[1] 0
+## no duplicates
+```
+
+2. Attention checks
+
+```{r}
+survey |>
+  count(attention)
+```
+1181 passed attention checks 3 did not answer
+
+
+3. Very short answering time
+
+```{r}
+summary(survey$elapsed_time_hh_mm_ss)
+```
+
+```{r}
+library(lubridate)
+
+survey_time <- survey |>
+  mutate(
+    # Extract time part (ignoring the arbitrary date)
+    time_str = str_extract(elapsed_time_hh_mm_ss, "\\d{2}:\\d{2}:\\d{2}"),
+    # Convert to seconds
+    elapsed_seconds = period_to_seconds(hms(time_str))
+  )
+```
+
+
+```{r}
+percentile_threshold <- quantile(survey_time$elapsed_seconds, 0.01, na.rm = TRUE)
+percentile_threshold
+```
+```{r include=FALSE, eval=interactive()}
+# Identify fast respondents
+fast_respondents <- survey_time %>%
+  filter(elapsed_seconds < percentile_threshold)
+nrow(fast_respondents)
+```
+
+```{r}
+survey_notshort <- survey_time |>
+  filter(elapsed_seconds >= percentile_threshold)
+```
+
+
+4. Same answer across tasks
+
+```{r}
+cbc_cols <- paste0("cbc1_", 1:10)
+
+survey_always <- survey |>
+  rowwise() |>
+  mutate(
+    always_same_choice = 
+      n_distinct(c_across(all_of(cbc_cols)), na.rm = TRUE) == 1
+  ) |>
+  ungroup()
+
+survey_always |>
+  count(always_same_choice)
+```
+
+5. Derive robustness check data frame by filtering out the three conditions
+
+```{r}
+survey_robust <- survey |>
+  # filter out NA answers for attention check questions
+  filter(!is.na(attention)) |>
+  # filter out answers with very short time span
+  mutate(
+    # Extract time part 
+    time_str = str_extract(elapsed_time_hh_mm_ss, "\\d{2}:\\d{2}:\\d{2}"),
+    # Convert to seconds
+    elapsed_seconds = period_to_seconds(hms(time_str))
+    ) |>
+  filter(elapsed_seconds >= percentile_threshold) |>
+  rowwise() |>
+  mutate(
+    always_same_choice = n_distinct(c_across(all_of(cbc_cols)), na.rm = TRUE) == 1) |>
+    ungroup() |>
+  # filter out always same choices 
+  filter(!always_same_choice)
+
+# check how many surveys left
+nrow(survey_robust)  
+```
+
+
+
+
+
+
