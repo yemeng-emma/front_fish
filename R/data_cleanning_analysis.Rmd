@@ -2,7 +2,9 @@
 title: "Exploring data in progress"
 author: "Meng Ye"
 date: "2025-08-28"
-output: html_document
+output:
+  html_document: default
+  word_document: default
 ---
 
 ## Set up and import data 
@@ -13,7 +15,7 @@ set.seed(1873) #generated at random.org
 ```
 
 
-```{r packages message=FALSE, warning=FALSE}
+```{r packages, message=FALSE, warning=FALSE}
 #load packages
 library(tidyverse)        # ggplot, dplyr, and friends
 library(broom)            # Convert model objects to tidy data frames
@@ -34,7 +36,7 @@ library(janitor)          # clean column names
 
 ```
 
-```{r plot setting message=FALSE, warning=FALSE}
+```{r plot setting, message=FALSE, warning=FALSE}
 #load packages
 # Custom ggplot theme to make pretty plots
 # Get the font at https://github.com/intel/clear-sans
@@ -438,9 +440,29 @@ p2 <- plot_data_mm |>
 p2
 ```
 
-```{r fig.height=8, fig.width=12}
+```{r fig.height=7, fig.width=12}
 p2 | p1
 ```
+
+
+
+```{r}
+## save picture for slides
+
+direct_effects <- p2 | p1
+
+ggsave(
+  filename = here("output","direct_effects_slide.png"),
+  plot = direct_effects,
+  width = 12,        # inches (fits well on a 16:9 slide)
+  height = 7,    # 10 * 9 / 16 keeps 16:9 ratio
+  dpi = 300,         # print-quality resolution
+  units = "in",
+  bg = "white"    
+)
+
+```
+
 
 ## Interactions 
 

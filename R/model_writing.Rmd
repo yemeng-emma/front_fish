@@ -1,0 +1,68 @@
+---
+title: "model_writing"
+author: "Meng Ye"
+date: "2025-11-12"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+$$
+\begin{aligned}
+&\ \textbf{Multinomial probability of selection of choice}_{i}\ \textbf{in respondent}_{j} \\
+\text{Choice}_{i_j} \sim&\ \operatorname{Categorical}\big(\{\mu_{1,i_j},\,\mu_{2,i_j},\,\mu_{3,i_j}\}\big) \\[10pt]
+&\ \textbf{Model for probability of each option} \\
+\{\mu_{1,i_j},\,\mu_{2,i_j},\,\mu_{3,i_j}\} =&\ (\beta_0 + b_{0_j}) \\
+&\ + \beta_1\,\text{rbi[Reduced price]}_{i_j}
+  + \beta_2\,\text{rbi[Full price]}_{i_j} \\
+&\ + \beta_3\,\text{ubi[Event space rental]}_{i_j}
+  + \beta_4\,\text{ubi[Running a pizza shop]}_{i_j} \\
+&\ + \beta_5\,\text{nonprofit type[Student tutoring center]}_{i_j}
+  + \beta_6\,\text{nonprofit type[Urban forestry center]}_{i_j}
+  + \beta_7\,\text{nonprofit type[Mental health center]}_{i_j} \\
+&\ + \beta_8\,\text{use of donations[Capacity building]}_{i_j}
+  + \beta_9\,\text{use of donations[Rainy day funds]}_{i_j}
+  + \beta_{10}\,\text{use of donations[Unrestricted use]}_{i_j} \\
+&\ + \beta_{11}\,\text{financial situation[Under financial stress]}_{i_j} \\[6pt]
+b_{0_j} \sim&\ \mathcal{N}(0,\sigma_0)\quad \text{Respondent-specific offset from global probability} \\[10pt]
+&\ \textbf{Priors} \\
+\beta_{0\dots 11} \sim&\ \mathcal{N}(0,3) \\
+\sigma_0 \sim&\ \operatorname{Exponential}(1)
+\end{aligned}
+$$
+Testing a narrower arrangement
+
+$$
+\begin{aligned}
+&\ \textbf{Multinomial probability of selection of choice}_{i}
+   \ \textbf{in respondent}_{j} \\[4pt]
+\text{Choice}_{i_j} \sim&
+   \ \operatorname{Categorical}\big(\{\mu_{1,i_j},\,\mu_{2,i_j},\,\mu_{3,i_j}\}\big) \\[10pt]
+
+&\ \textbf{Model for probability of each option} \\[3pt]
+\{\mu_{1,i_j},\,\mu_{2,i_j},\,\mu_{3,i_j}\} =&\
+   (\beta_0 + b_{0_j}) \\[3pt]
+&\ + \beta_1\,\text{rbi[Reduced price]}_{i_j}
+  + \beta_2\,\text{rbi[Full price]}_{i_j} \\[3pt]
+&\ + \beta_3\,\text{ubi[Event space rental]}_{i_j}
+  + \beta_4\,\text{ubi[Running a pizza shop]}_{i_j} \\[3pt]
+&\ + \beta_5\,\text{nonprofit type[Student tutoring center]}_{i_j}
+  + \beta_6\,\text{nonprofit type[Urban forestry center]}_{i_j} \\[3pt]
+&\ + \beta_7\,\text{nonprofit type[Mental health center]}_{i_j} \\[3pt]
+&\ + \beta_8\,\text{use of donations[Capacity building]}_{i_j}
+  + \beta_9\,\text{use of donations[Rainy day funds]}_{i_j} \\[3pt]
+&\ + \beta_{10}\,\text{use of donations[Unrestricted use]}_{i_j} \\[3pt]
+&\ + \beta_{11}\,\text{financial situation[Under financial stress]}_{i_j} \\[8pt]
+
+b_{0_j} \sim&\ \mathcal{N}(0,\sigma_0)
+   \quad \text{Respondent-specific offset from global probability} \\[10pt]
+
+&\ \textbf{Priors} \\[3pt]
+\beta_{0\dots 11} \sim&\ \mathcal{N}(0,3)
+   \qquad
+\sigma_0 \sim\ \operatorname{Exponential}(1)
+\end{aligned}
+$$
+
+
